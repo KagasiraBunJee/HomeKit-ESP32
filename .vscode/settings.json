@@ -1,0 +1,6 @@
+{
+    "terminal.integrated.env.osx": {
+        "PATH": "/Users/sergei/.platformio/penv/bin:/Users/sergei/.platformio/penv:/opt/local/bin:/opt/local/sbin:/usr/local/php5/bin:/usr/local/bin:/usr/bin:/usr/sbin:/bin:/sbin:/usr/local/mysql/bin",
+        "PLATFORMIO_CALLER": "vscode"
+    }
+}
