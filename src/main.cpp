@@ -1,10 +1,12 @@
 #include <Arduino.h>
-// #include "hap.h"
 #include <WiFi.h>
+// #include <Crypto.h>
 #include "mdns.h"
 #include "esp_wifi.h"
 //this include is in gitignore, store security credentials there
 #include "access/access.h"
+#include "hap/hap_defines.h"
+#include "Ed25519.h"
 
 #define PORT 14000
 
@@ -13,7 +15,7 @@
 #define HAP_PROTO "_tcp"
 #define DEVICE_NAME "RGB Light"
 
-WiFiServer server(80);
+WiFiServer server;
 
 void wifi_setup() {
 
@@ -54,7 +56,7 @@ void mdns_setup() {
     } else {
         Serial.println("mdns_hostname_set ok...");
     }
-    
+    delay(2000);
     status = mdns_instance_name_set(DEVICE_NAME);
     if (status) {
         Serial.println("Error mdns_instance_name_set");
@@ -62,14 +64,14 @@ void mdns_setup() {
         Serial.println("mdns_instance_name_set ok...");
     }
 
-
+    delay(2000);
     status = mdns_service_add(DEVICE_NAME, HAP_SERVICE, HAP_PROTO, 14000, NULL, 0);
     if (status) {
         Serial.println("Error mdns_service_add");
     } else {
         Serial.println("mdns_service_add ok...");
     }
-
+    
     uint8_t mac[6];
     esp_wifi_get_mac(ESP_IF_WIFI_STA, mac);
     char accessory_id[32] = {0,};
@@ -83,7 +85,7 @@ void mdns_setup() {
     memset(pairState, 0, sizeof(pairState));
     sprintf(pairState, "%d", 1);
     memset(category, 0, sizeof(category));
-    sprintf(category, "%d", 1);
+    sprintf(category, "%d", HAP_ACCESSORY_CATEGORY_LIGHTBULB);
     
     mdns_txt_item_t hap_service_txt[8] = {
         {(char*)"c#", (char*)"1.0"},
@@ -95,7 +97,7 @@ void mdns_setup() {
         {(char*)"sf", (char*)pairState},
         {(char*)"ci", (char*)category},
     };
-    
+    delay(2000);
     status = mdns_service_txt_set(HAP_SERVICE, HAP_PROTO, hap_service_txt, 8);
     if (status) {
         Serial.println("Error mdns_service_txt_set");
@@ -106,11 +108,22 @@ void mdns_setup() {
 }
 
 void setup() {
-    Serial.begin(9600);
+    Serial.begin(115200);
     wifi_setup();
     mdns_setup();
+
+    // server.begin(PORT);
 }
 
 void loop() {
     
+    // WiFiClient client = server.available();
+    // if (!client) {
+    //     return;
+    // }
+
+    // Serial.println("New Client");
+    // Serial.println(client.readString());
+
+    // delay(1000);
 }
