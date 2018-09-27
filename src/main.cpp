@@ -12,6 +12,7 @@
 // #include "Ed25519.h"
 // #include "utils/mongoose.h"
 #include "utils/httpd.h"
+#include "security/ed25519/src/ed25519.h"
 // #include "hap/src/hap.h"
 
 #define PORT 14000
@@ -20,6 +21,8 @@
 #define HAP_SERVICE "_hap"
 #define HAP_PROTO "_tcp"
 #define DEVICE_NAME "RGB Light"
+
+#include "stdio.h"
 
 const int WIFI_CONNECTED_BIT = BIT0;
 void *bindb;
@@ -92,6 +95,7 @@ void mdns_setup() {
         Serial.println("mdns_service_txt_set ok...");
     }
     
+    
 }
 
 static esp_err_t event_handler(void *ctx, system_event_t *event) {
@@ -116,14 +120,12 @@ static esp_err_t event_handler(void *ctx, system_event_t *event) {
             Serial.print(" with IPv6: ");
             Serial.print(ip6addr_ntoa(&event->event_info.got_ip6.ip6_info.ip));
             Serial.println("");
-
-            delay(10000);
-            mdns_setup();
             break;
         default:
             break;
 
     }
+    mdns_handle_system_event(ctx, event);
     return ESP_OK;
 }
 
@@ -169,6 +171,22 @@ void wifi_setup() {
 static void _msg_recv(void* connection, struct mg_connection* nc, char* msg, int len)
 {
     Serial.println("_msg_recv");
+
+    struct http_message shm, *hm = &shm;
+    char* http_raw_msg = msg;
+    int http_raw_msg_len = len;
+    mg_parse_http(http_raw_msg, http_raw_msg_len, hm, 1);
+
+    char addr[32];
+    mg_sock_addr_to_str(&nc->sa, addr, sizeof(addr),
+            MG_SOCK_STRINGIFY_IP | MG_SOCK_STRINGIFY_PORT);
+    
+    printf("HTTP request from %s: %.*s %.*s %.*s", addr, (int) hm->method.len,
+            hm->method.p, (int) hm->uri.len, hm->uri.p, (int)hm->message.len, hm->message.p);
+
+    if (strncmp(hm->uri.p, "/pair-setup", strlen("/pair-setup")) == 0) {
+        Serial.println("want to pair");
+    }
     // struct hap_connection* hc = connection;
 
     // if (hc->pair_verified) {
@@ -220,13 +238,8 @@ static void _hap_connection_accept(void* accessory, struct mg_connection* nc)
 void setup() {
     Serial.begin(115200);
     delay(1000);
-    // wifi_sta_setup();
-    // delay(10000);
-    
-    // server.begin();
-    // delay(3000);
-    wifi_setup();
 
+    wifi_setup();
     mdns_setup();
 
     delay(10000);
@@ -242,6 +255,13 @@ void setup() {
     // httpd_setup();
     // delay(1000);
     // httpd_b();
+    const char* preSeed = "3ed4f50fd9a9c2182bb814a7b084fbd824adf1019ac353020842c64e14a7ce59";
+    int len = sizeof(preSeed);
+    char seed[32];
+    // strcpy(seed, preSeed);
+    ed25519_create_seed((unsigned char*)seed);
+    Serial.println(seed);
+    // ed25519_create_seed((unsigned char*)seed);
 }
 
 void loop() {
