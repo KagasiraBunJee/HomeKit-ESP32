@@ -2,6 +2,9 @@
 #include <WiFi.h>
 
 // #include <Crypto.h>
+#include <os.h>
+#include "utils/srp.h"
+#include "utils/tlv.h"
 #include "mdns.h"
 #include "esp_wifi.h"
 //this include is in gitignore, store security credentials there
@@ -21,6 +24,8 @@
 #define HAP_SERVICE "_hap"
 #define HAP_PROTO "_tcp"
 #define DEVICE_NAME "RGB Light"
+
+#define SRP_SALT_LENGTH         16
 
 #include "stdio.h"
 
@@ -69,7 +74,7 @@ void mdns_setup() {
     Serial.print("Accessory ID: ");
     Serial.print(accessory_id);
     Serial.println("");
-
+    
     char pairState[4];
     char category[4];
     memset(pairState, 0, sizeof(pairState));
@@ -168,6 +173,93 @@ void wifi_setup() {
     Serial.println("");
 }
 
+static int _setup_m2(struct pair_setup* ps, 
+        uint8_t* device_msg, int device_msg_length, 
+        uint8_t** acc_msg, int* acc_msg_length)
+{
+
+        unsigned char seed[32], publicKey[32], privateKey[64], signature[64];
+        size_t acc_msg_size = 0;
+        ed25519_create_keypair(publicKey, privateKey, seed);
+    
+        const unsigned char message[] = "Hello, world!";
+        const int message_len = strlen((char*) message);
+        ed25519_sign(signature, message, message_len, publicKey, privateKey);
+
+        if (ed25519_verify(signature, message, message_len, publicKey)) {
+            Serial.println("valid signature");
+        } else {
+            Serial.println("invalid signature");
+        }
+        Serial.println("init SRP");
+                    srp_init(seed, sizeof(seed));
+            // mbedtls_mpi *salt;
+        Serial.println("srp_set_username");
+            srp_context_t serverSrp = srp_new_server(SRP_TYPE_3072, SRP_CRYPTO_HASH_ALGORITHM_SHA512);
+            srp_set_username(serverSrp,"Pair-Setup");
+        
+        Serial.println("srp_set_auth_password");
+            // srp_set_params(serverSrp, NULL, NULL, salt);
+            const unsigned char* t = reinterpret_cast<const unsigned char *>( LIGHTS_CODE );
+            srp_set_auth_password(serverSrp, t, strlen(LIGHTS_CODE));
+
+        Serial.println("srp_gen_pub");
+            srp_gen_pub(serverSrp);
+            
+        Serial.println("srp_get_public_key");
+            mbedtls_mpi *public_k = srp_get_public_key(serverSrp);
+            if (public_k < 0) {
+                printf("srp_host_key_get failed\n");
+                // return pair_error(HAP_TLV_ERROR_UNKNOWN, acc_msg, acc_msg_length);
+            }
+        Serial.println("tlv_encode_length(public_k->n)");
+            acc_msg_size += tlv_encode_length(public_k->n);
+            // *acc_msg_length = tlv_encode_length(public_k->n);
+
+#if 0
+    // ESP_LOGI(TAG, "SRP_PUBLIC_KEY_LENGTH");
+    // _array_print((char*)host_public_key, SRP_PUBLIC_KEY_LENGTH);
+#endif
+        Serial.println("srp_get_salt");
+    mbedtls_mpi *salt = srp_get_salt(serverSrp);
+    if (salt < 0) {
+        printf("srp_salt failed\n");
+        // return pair_error(HAP_TLV_ERROR_UNKNOWN, acc_msg, acc_msg_length);
+    }
+    Serial.println("tlv_encode_length(salt->n)");
+    acc_msg_size += tlv_encode_length(salt->n);
+    // *acc_msg_length += tlv_encode_length(salt->n);
+    
+#if 0
+    // ESP_LOGI(TAG, "SALT");
+    // _array_print((char*)salt, SRP_SALT_LENGTH);
+#endif
+
+    Serial.println("tlv_encode_length(sizeof(state)");
+    uint8_t state[] = {0x02};
+    acc_msg_size += tlv_encode_length(sizeof(state));
+    // *acc_msg_length += tlv_encode_length(sizeof(state));
+    *acc_msg_length = acc_msg_size;
+
+    Serial.println("acc_msg malloc");
+    (*acc_msg) = static_cast<uint8_t *>(malloc(acc_msg_size));
+    if (*acc_msg == NULL) {
+        printf("malloc failed\n");
+        // return pair_error(HAP_TLV_ERROR_UNKNOWN, acc_msg, acc_msg_length);
+    }
+
+    uint8_t* tlv_encode_ptr = *acc_msg;
+
+    Serial.println("+= tlv_encode");
+    tlv_encode_ptr += tlv_encode(HAP_TLV_TYPE_SALT, SRP_SALT_LENGTH, (uint8_t*)(salt->p), tlv_encode_ptr);
+    tlv_encode_ptr += tlv_encode(HAP_TLV_TYPE_PUBLICKEY, public_k->n, (uint8_t*)public_k->p, tlv_encode_ptr);
+    tlv_encode_ptr += tlv_encode(HAP_TLV_TYPE_STATE, sizeof(state), state, tlv_encode_ptr);
+
+    
+
+    return 0;
+}
+
 static void _msg_recv(void* connection, struct mg_connection* nc, char* msg, int len)
 {
     Serial.println("_msg_recv");
@@ -182,10 +274,70 @@ static void _msg_recv(void* connection, struct mg_connection* nc, char* msg, int
             MG_SOCK_STRINGIFY_IP | MG_SOCK_STRINGIFY_PORT);
     
     printf("HTTP request from %s: %.*s %.*s %.*s", addr, (int) hm->method.len,
-            hm->method.p, (int) hm->uri.len, hm->uri.p, (int)hm->message.len, hm->message.p);
+            hm->method.p, (int) hm->uri.len, hm->uri.p, (int)hm->body.len, hm->body.p);
 
     if (strncmp(hm->uri.p, "/pair-setup", strlen("/pair-setup")) == 0) {
         Serial.println("want to pair");
+
+        struct tlv* state_tlv = tlv_decode((uint8_t*)hm->body.p, hm->body.len, 
+            HAP_TLV_TYPE_STATE);
+        if (state_tlv == NULL) {
+            printf("tlv_decode failed. type:%d\n", HAP_TLV_TYPE_STATE);
+        }
+
+        uint8_t state = ((uint8_t*)&state_tlv->value)[0];
+
+        switch (state) {
+        case 0x01:
+            {
+            Serial.println("0x01");
+
+            // srp_init(seed, sizeof(seed));
+            
+            char* res_header = NULL;
+            int res_header_len = 0;
+
+            char* res_body = NULL;
+            int body_len = 0;
+            if (_setup_m2(NULL, (uint8_t*)hm->body.p, (int)hm->body.len, (uint8_t**)res_body, (int *)body_len)) {
+                Serial.println("test fail");
+            }
+
+            static const char* header_fmt = 
+    "HTTP/1.1 200 OK\r\n"
+    "Content-Length: %d\r\n"
+    "Content-Type: application/pairing+tlv8\r\n"
+    "\r\n";
+    
+    res_header = (char *)malloc(strlen(header_fmt) + 16);
+    sprintf(res_header, header_fmt, *(int *)body_len);
+    res_header_len = sizeof(res_header);
+            
+        if (res_header) {
+            mg_send(nc, res_header, res_header_len);
+        }
+
+        if (res_body) {
+            mg_send(nc, res_body, body_len);
+        }
+
+            // error = _setup_m2(ps, (uint8_t*)req_body, req_body_len, (uint8_t**)res_body, res_body_len);
+            break;
+            }
+        // case 0x03:
+        //     Serial.println("0x03");
+        //     // error = _setup_m4(ps, (uint8_t*)req_body, req_body_len, (uint8_t**)res_body, res_body_len);
+        //     break;
+        // case 0x05:
+        //     Serial.println("0x05");
+        //     // error = _setup_m6(ps, (uint8_t*)req_body, req_body_len, (uint8_t**)res_body, res_body_len);
+        //     break;
+        default:
+            printf("[PAIR-SETUP][ERR] Invalid state number. %d\n", state);
+            break;
+        }
+
+        tlv_decoded_item_free(state_tlv);
     }
     // struct hap_connection* hc = connection;
 
@@ -255,12 +407,10 @@ void setup() {
     // httpd_setup();
     // delay(1000);
     // httpd_b();
-    const char* preSeed = "3ed4f50fd9a9c2182bb814a7b084fbd824adf1019ac353020842c64e14a7ce59";
-    int len = sizeof(preSeed);
-    char seed[32];
-    // strcpy(seed, preSeed);
-    ed25519_create_seed((unsigned char*)seed);
-    Serial.println(seed);
+
+    
+    // printf(reinterpret_cast<char*>(seed));
+    // Serial.println(reinterpret_cast<char*>(seed));
     // ed25519_create_seed((unsigned char*)seed);
 }
 
