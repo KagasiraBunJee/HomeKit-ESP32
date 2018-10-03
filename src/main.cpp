@@ -26,7 +26,7 @@
 #define HAP_PROTO "_tcp"
 #define DEVICE_NAME "RGB Light"
 
-#define SRP_SALT_LENGTH         16
+#define SRP_SALT_LENGTH 16
 
 #include "stdio.h"
 
@@ -34,82 +34,98 @@ const int WIFI_CONNECTED_BIT = BIT0;
 void *bindb;
 srp_context_t serverSrp;
 
-void mdns_setup() {
+void mdns_setup()
+{
 
     esp_err_t status = mdns_init();
     // delay(2000);
-    if (status) {
+    if (status)
+    {
         Serial.println("Error mdns_init");
-    } else {
+    }
+    else
+    {
         Serial.println("mdns_init ok...");
     }
 
     status = mdns_hostname_set("led.local");
     // delay(1000);
-    if (status) {
+    if (status)
+    {
         Serial.println("Error mdns_hostname_set");
-    } else {
+    }
+    else
+    {
         Serial.println("mdns_hostname_set ok...");
     }
     // delay(1000);
     status = mdns_instance_name_set(DEVICE_NAME);
-    if (status) {
+    if (status)
+    {
         Serial.println("Error mdns_instance_name_set");
-    } else {
+    }
+    else
+    {
         Serial.println("mdns_instance_name_set ok...");
     }
 
     // delay(1000);
     status = mdns_service_add(DEVICE_NAME, HAP_SERVICE, HAP_PROTO, 14000, NULL, 0);
-    if (status) {
+    if (status)
+    {
         Serial.println("Error mdns_service_add");
-    } else {
+    }
+    else
+    {
         Serial.println("mdns_service_add ok...");
     }
-    
+
     uint8_t mac[6];
     esp_wifi_get_mac(ESP_IF_WIFI_STA, mac);
-    char accessory_id[32] = {0,};
+    char accessory_id[32] = {
+        0,
+    };
     sprintf(accessory_id, "%02X:%02X:%02X:%02X:%02X:%02X", mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
     Serial.print("Accessory ID: ");
     Serial.print(accessory_id);
     Serial.println("");
-    
+
     char pairState[4];
     char category[4];
     memset(pairState, 0, sizeof(pairState));
     sprintf(pairState, "%d", 1);
     memset(category, 0, sizeof(category));
     sprintf(category, "%d", HAP_ACCESSORY_CATEGORY_LIGHTBULB);
-    
+
     mdns_txt_item_t hap_service_txt[8] = {
-        {(char*)"c#", (char*)"1.0"},
-        {(char*)"ff", (char*)"0"},
-        {(char*)"pv", (char*)"1.0"},
-        {(char*)"id", (char*)accessory_id},
-        {(char*)"md", (char*)DEVICE_NAME},
-        {(char*)"s#", (char*)"1"},
-        {(char*)"sf", (char*)pairState},
-        {(char*)"ci", (char*)category},
+        {(char *)"c#", (char *)"1.0"},
+        {(char *)"ff", (char *)"0"},
+        {(char *)"pv", (char *)"1.0"},
+        {(char *)"id", (char *)accessory_id},
+        {(char *)"md", (char *)DEVICE_NAME},
+        {(char *)"s#", (char *)"1"},
+        {(char *)"sf", (char *)pairState},
+        {(char *)"ci", (char *)category},
     };
     // delay(1000);
     status = mdns_service_txt_set(HAP_SERVICE, HAP_PROTO, hap_service_txt, 8);
-    if (status) {
+    if (status)
+    {
         Serial.println("Error mdns_service_txt_set");
-    } else {
+    }
+    else
+    {
         Serial.println("mdns_service_txt_set ok...");
     }
-    
-    
 }
 
 void wifi_setup() {
-    
     delay(1000);
     Serial.println("Connecting to network");
-    
+
     WiFi.begin(WIFI_SSID, WIFI_PASS);
-    while (WiFi.status() != WL_CONNECTED) {
+    while (WiFi.status() != WL_CONNECTED)
+    {
         Serial.print(".");
         delay(100);
     }
@@ -192,6 +208,7 @@ static int _setup_m2(struct pair_setup *ps,
 
 static void _msg_recv(void *connection, struct mg_connection *nc, char *msg, int len)
 {
+    Serial.println(heap_caps_get_free_size(MALLOC_CAP_DEFAULT));
     Serial.println("_msg_recv");
 
     struct http_message shm, *hm = &shm;
@@ -209,7 +226,6 @@ static void _msg_recv(void *connection, struct mg_connection *nc, char *msg, int
     if (strncmp(hm->uri.p, "/pair-setup", strlen("/pair-setup")) == 0)
     {
         Serial.println("want to pair");
-        
         struct tlv *state_tlv = tlv_decode((uint8_t *)hm->body.p, hm->body.len,
                                            HAP_TLV_TYPE_STATE);
         if (state_tlv == NULL)
@@ -218,7 +234,6 @@ static void _msg_recv(void *connection, struct mg_connection *nc, char *msg, int
         }
 
         uint8_t state = ((uint8_t *)&state_tlv->value)[0];
-        
         switch (state)
         {
         case 0x01:
@@ -232,7 +247,6 @@ static void _msg_recv(void *connection, struct mg_connection *nc, char *msg, int
 
             char *res_body = NULL;
             int body_len = 0;
-
             if (_setup_m2(NULL, (uint8_t *)hm->body.p, (int)hm->body.len, (uint8_t**)res_body, &body_len))
             {
                 Serial.println("test fail");
@@ -260,7 +274,6 @@ static void _msg_recv(void *connection, struct mg_connection *nc, char *msg, int
             res_header_len = sizeof(res_header);
         
             Serial.println("send to ios");
-
             // if (res_header) {
             //     mg_send(nc, res_header, res_header_len);
             // }
@@ -299,18 +312,19 @@ static void _msg_recv(void *connection, struct mg_connection *nc, char *msg, int
     // }
 }
 
-static void _hap_connection_close(void* connection, struct mg_connection* nc)
+static void _hap_connection_close(void *connection, struct mg_connection *nc)
 {
     Serial.println("_hap_connection_close");
     srp_free(serverSrp);
 }
 
-static void _hap_connection_accept(void* accessory, struct mg_connection* nc)
+static void _hap_connection_accept(void *accessory, struct mg_connection *nc)
 {
     Serial.println("_hap_connection_accept");
 }
 
-void setup() {
+void setup()
+{
     Serial.begin(115200);
     delay(1000);
 
@@ -331,14 +345,14 @@ void setup() {
     // delay(1000);
     // httpd_b();
 
-    
     // printf(reinterpret_cast<char*>(seed));
     // Serial.println(reinterpret_cast<char*>(seed));
     // ed25519_create_seed((unsigned char*)seed);
 }
 
-void loop() {
-    
+void loop()
+{
+
     // WiFiClient client = server.available();
     // if (!client) {
     //     return;
