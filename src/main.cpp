@@ -13,6 +13,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "hap/hap_defines.h"
+#include "accessory/accessory.hpp"
 // #include "Ed25519.h"
 // #include "utils/mongoose.h"
 #include "utils/httpd.h"
@@ -26,6 +27,12 @@
 #define HAP_PROTO "_tcp"
 #define DEVICE_NAME "RGB Light"
 
+static const char *header_fmt =
+                "HTTP/1.1 200 OK\r\n"
+                "Content-Length: %d\r\n"
+                "Content-Type: application/pairing+tlv8\r\n"
+                "\r\n";
+
 #define SRP_SALT_LENGTH 16
 
 #include "stdio.h"
@@ -34,58 +41,49 @@ const int WIFI_CONNECTED_BIT = BIT0;
 static EventGroupHandle_t wifi_event_group;
 void *bindb;
 srp_context_t serverSrp;
+srp_context_t clientSrp;
 
 void mdns_setup()
 {
 
     esp_err_t status = mdns_init();
     // delay(2000);
-    if (status)
-    {
+    if (status) {
         Serial.println("Error mdns_init");
     }
-    else
-    {
+    else {
         Serial.println("mdns_init ok...");
     }
 
     status = mdns_hostname_set("led.local");
     // delay(1000);
-    if (status)
-    {
+    if (status) {
         Serial.println("Error mdns_hostname_set");
     }
-    else
-    {
+    else {
         Serial.println("mdns_hostname_set ok...");
     }
     // delay(1000);
     status = mdns_instance_name_set(DEVICE_NAME);
-    if (status)
-    {
+    if (status) {
         Serial.println("Error mdns_instance_name_set");
     }
-    else
-    {
+    else {
         Serial.println("mdns_instance_name_set ok...");
     }
 
     // delay(1000);
     status = mdns_service_add(DEVICE_NAME, HAP_SERVICE, HAP_PROTO, 14000, NULL, 0);
-    if (status)
-    {
+    if (status) {
         Serial.println("Error mdns_service_add");
     }
-    else
-    {
+    else {
         Serial.println("mdns_service_add ok...");
     }
 
     uint8_t mac[6];
     esp_wifi_get_mac(ESP_IF_WIFI_STA, mac);
-    char accessory_id[32] = {
-        0,
-    };
+    char accessory_id[32] = {0,};
     sprintf(accessory_id, "%02X:%02X:%02X:%02X:%02X:%02X", mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
     Serial.print("Accessory ID: ");
     Serial.print(accessory_id);
@@ -142,28 +140,14 @@ void wifi_setup() {
     Serial.println("");
 }
 
+static int _verify() {
+
+}
+
 static int _setup_m2(struct pair_setup *ps,
                      uint8_t *device_msg, int device_msg_length,
                      uint8_t** acc_msg, int* acc_msg_length)
 {
-
-    unsigned char seed[32], publicKey[32], privateKey[64], signature[64];
-    size_t acc_msg_size = 0;
-    ed25519_create_keypair(publicKey, privateKey, seed);
-
-    const unsigned char message[] = "Hello, world!";
-    const int message_len = strlen((char *)message);
-    ed25519_sign(signature, message, message_len, publicKey, privateKey);
-
-    if (ed25519_verify(signature, message, message_len, publicKey))
-    {
-        Serial.println("valid signature");
-    }
-    else
-    {
-        Serial.println("invalid signature");
-    }
-
     Serial.println("init SRP");
     srp_init(NULL, 0);
     // mbedtls_mpi *salt;
@@ -217,6 +201,31 @@ static int _setup_m2(struct pair_setup *ps,
     return 0;
 }
 
+static int _setup_m4(struct pair_setup* ps, 
+        uint8_t* device_msg, int device_msg_length, 
+        uint8_t** acc_msg, int* acc_msg_length)
+{
+    struct tlv* ios_srp_public_key = tlv_decode(device_msg, device_msg_length, 
+            HAP_TLV_TYPE_PUBLICKEY);
+    
+    if (ios_srp_public_key == NULL) {
+        Serial.println("failed to get HAP_TLV_TYPE_PUBLICKEY");
+        return 1;
+    }
+    // ios_srp_public_key->
+    
+    mbedtls_mpi *mpi;
+    mbedtls_mpi_init(mpi);
+    mbedtls_mpi_write_binary(mpi, ios_srp_public_key->value, ios_srp_public_key->length);
+    if (mpi == NULL) {
+        Serial.println("error to set HAP_TLV_TYPE_PUBLICKEY");
+        return 1;
+    }
+    // srp_compute_key()
+
+    return 0;
+}
+
 int pair_setup_do(void* _ps, char* req_body, int req_body_len, char** res_body, int* res_body_len) {
 
     return _setup_m2(NULL, (uint8_t*)req_body, req_body_len, (uint8_t**)res_body, res_body_len);
@@ -250,65 +259,52 @@ static void _msg_recv(void *connection, struct mg_connection *nc, char *msg, int
         }
 
         uint8_t state = ((uint8_t *)&state_tlv->value)[0];
+
+        char *res_header = NULL;
+        int res_header_len = 0;
+
+        char *res_body = NULL;
+        int body_len = 0;
+
+        char *req_body = strdup(hm->body.p);
+
         switch (state)
         {
-        case 0x01:
-        {
-            Serial.println("0x01");
+            case 0x01:
+            {
+                if (pair_setup_do(NULL, req_body, (int)hm->body.len, &res_body, &body_len))
+                {
+                    Serial.println("test fail");
+                }
+                if (res_body == NULL)
+                {
+                    Serial.println("ERROR");
+                }
 
-            // srp_init(seed, sizeof(seed));
+                res_header = (char *)malloc(strlen(header_fmt));
+                sprintf(res_header, header_fmt, body_len);
+                res_header_len = sizeof(res_header);
+                Serial.println("send to ios");
 
-            char *res_header = NULL;
-            int res_header_len = 0;
-
-            char *res_body = NULL;
-            int body_len = 0;
-            
-            char *req_body = strdup(hm->body.p);
-            
-            if (pair_setup_do(NULL, req_body, (int)hm->body.len, &res_body, &body_len)) {
-                Serial.println("test fail");
+                if (res_body)
+                {
+                    mg_send(nc, res_header, res_header_len);
+                    mg_send(nc, res_body, body_len);
+                } else {
+                    Serial.println("no body");
+                }
+                
+                delay(3000);
+                break;
             }
-            if (res_body == NULL) {
-                Serial.println("ERROR");
+        case 0x03:
+            Serial.println("0x03");
+            if (_setup_m4(NULL, (uint8_t*)req_body, (int)hm->body.len, (uint8_t**)res_body, &body_len)) {
+                Serial.println("0x03 fail");
+                return;
             }
-            Serial.println("tlv_decode");
-            struct tlv *new_state_tlv = tlv_decode((uint8_t*)res_body, body_len, HAP_TLV_TYPE_STATE);
-            Serial.println("tlv_decode success");
-            uint8_t new_state = ((uint8_t *)&new_state_tlv->value)[0];
-            Serial.println("tlv_decode success get raw state");
-            if (new_state == 0x02) {
-                Serial.println("success");
-            }
-
-            char *signedBody = reinterpret_cast<char*>(res_body);
-            printf(signedBody);
-            static const char *header_fmt =
-                "HTTP/1.1 200 OK\r\n"
-                "Content-Length: %d\r\n"
-                "Content-Type: application/pairing+tlv8\r\n"
-                "\r\n";
-            
-            
-            res_header = (char *)malloc(strlen(header_fmt));
-            sprintf(res_header, header_fmt, body_len);
-            res_header_len = sizeof(res_header);
-            Serial.println("send to ios");
-            if (res_header) {
-                mg_send(nc, "1234", 4);
-            }
-            
-            // if (res_body) {
-            //     mg_send(nc, res_body, body_len);
-            // }
-
-            // error = _setup_m2(ps, (uint8_t*)req_body, req_body_len, (uint8_t**)res_body, res_body_len);
+            // error = _setup_m4(ps, (uint8_t*)req_body, req_body_len, (uint8_t**)res_body, res_body_len);
             break;
-        }
-        // case 0x03:
-        //     Serial.println("0x03");
-        //     // error = _setup_m4(ps, (uint8_t*)req_body, req_body_len, (uint8_t**)res_body, res_body_len);
-        //     break;
         // case 0x05:
         //     Serial.println("0x05");
         //     // error = _setup_m6(ps, (uint8_t*)req_body, req_body_len, (uint8_t**)res_body, res_body_len);
@@ -318,7 +314,7 @@ static void _msg_recv(void *connection, struct mg_connection *nc, char *msg, int
             break;
         }
 
-        // tlv_decoded_item_free(state_tlv);
+        tlv_decoded_item_free(state_tlv);
     }
 
     
@@ -353,39 +349,25 @@ void setup()
     wifi_setup();
     mdns_setup();
 
+    struct httpd_ops httpd_ops = {
+        .accept = _hap_connection_accept,
+        .close = _hap_connection_close,
+        .recv = _msg_recv,
+    };
+
     delay(10000);
     xEventGroupSetBits(wifi_event_group, WIFI_CONNECTED_BIT);
     {
-        Serial.println("httpd_init");
-        struct httpd_ops httpd_ops = {
-            .accept = _hap_connection_accept,
-            .close = _hap_connection_close,
-            .recv = _msg_recv,
-        };
+        char *t = (char *)malloc(4);
+        memcpy(t, "1234", 4);
         httpd_init(&httpd_ops);
-
-        bindb = httpd_bind(PORT, NULL);
+        delay(10000);
+        Serial.println("httpd_init");
+        bindb = httpd_bind(PORT, t);
     }
-
-    // httpd_setup();
-    // delay(1000);
-    // httpd_b();
-
-    // printf(reinterpret_cast<char*>(seed));
-    // Serial.println(reinterpret_cast<char*>(seed));
-    // ed25519_create_seed((unsigned char*)seed);
 }
 
 void loop()
 {
 
-    // WiFiClient client = server.available();
-    // if (!client) {
-    //     return;
-    // }
-
-    // Serial.println("New Client");
-    // Serial.println(client.readString());
-
-    // delay(1000);
 }

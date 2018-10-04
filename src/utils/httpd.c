@@ -85,7 +85,7 @@ err_mg_bind:
 }
 
 void httpd_init(struct httpd_ops* ops) {
-#define HTTPD_STACK (1024*8)
+#define HTTPD_STACK (1024*16)
     mg_mgr_init(&_mgr, NULL);
     _httpd_mutex = xSemaphoreCreateMutex();
     _ops = *ops;

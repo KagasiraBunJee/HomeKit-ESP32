@@ -1477,9 +1477,14 @@ size_t mbuf_insert(struct mbuf *a, size_t off, const void *buf, size_t len) {
     printf("start insert MBUF_REALLOC");
     size_t new_size = (size_t)((a->len + len) * MBUF_SIZE_MULTIPLIER);
     if ((p = (char *) MBUF_REALLOC(a->buf, new_size)) != NULL) {
+      printf("start insert MBUF_REALLOC success");
       a->buf = p;
+      printf("start insert memmove");
       memmove(a->buf + off + len, a->buf + off, a->len - off);
+      printf("start insert memmove success");
+      printf("start insert memcpy");
       if (buf != NULL) memcpy(a->buf + off, buf, len);
+      printf("start insert memcpy success");
       a->len += len;
       a->size = new_size;
     } else {
