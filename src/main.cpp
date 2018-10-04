@@ -31,6 +31,7 @@
 #include "stdio.h"
 
 const int WIFI_CONNECTED_BIT = BIT0;
+static EventGroupHandle_t wifi_event_group;
 void *bindb;
 srp_context_t serverSrp;
 
@@ -185,25 +186,40 @@ static int _setup_m2(struct pair_setup *ps,
 
     int bodySize = 0;
 
-    uint8_t state1[] = {0x02};
-    bodySize += sizeof(state1);
-    bodySize += public_k->n;
-    bodySize += salt->n;
-
+    uint8_t state[] = {0x02};
+    bodySize += tlv_encode_length(sizeof(state));
+    bodySize += tlv_encode_length(SRP_PUBLIC_KEY_LENGTH);
+    bodySize += tlv_encode_length(SRP_SALT_LENGTH);
+    Serial.print(public_k->n);
+    Serial.print("-");
+    Serial.print(SRP_PUBLIC_KEY_LENGTH);
+    Serial.println("");
+    Serial.print(salt->n);
+    Serial.print("-");
+    Serial.print(SRP_SALT_LENGTH);
+    Serial.println("");
+    
     Serial.println("malloc acc_msg");
     *acc_msg = (uint8_t *)(malloc(bodySize));
     Serial.println("malloc acc_msg success");
+    
+    uint8_t* tlv_encode_ptr = *acc_msg;
 
-    tlv_encode(HAP_TLV_TYPE_SALT, SRP_SALT_LENGTH, (uint8_t *)(salt->p), *acc_msg);
+    tlv_encode_ptr += tlv_encode(HAP_TLV_TYPE_SALT, SRP_SALT_LENGTH, (uint8_t *)(salt->p), *acc_msg);
     Serial.println("tlv_encode HAP_TLV_TYPE_SALT success");
-    tlv_encode(HAP_TLV_TYPE_PUBLICKEY, public_k->n, (uint8_t *)public_k->p, *acc_msg);
+    tlv_encode_ptr += tlv_encode(HAP_TLV_TYPE_PUBLICKEY, public_k->n, (uint8_t *)public_k->p, *acc_msg);
     Serial.println("tlv_encode HAP_TLV_TYPE_PUBLICKEY success");
-    tlv_encode(HAP_TLV_TYPE_STATE, sizeof(state1), state1, *acc_msg);
+    tlv_encode_ptr += tlv_encode(HAP_TLV_TYPE_STATE, sizeof(state), state, *acc_msg);
     Serial.println("tlv_encode HAP_TLV_TYPE_STATE success");
 
     *acc_msg_length = bodySize;
     
     return 0;
+}
+
+int pair_setup_do(void* _ps, char* req_body, int req_body_len, char** res_body, int* res_body_len) {
+
+    return _setup_m2(NULL, (uint8_t*)req_body, req_body_len, (uint8_t**)res_body, res_body_len);
 }
 
 static void _msg_recv(void *connection, struct mg_connection *nc, char *msg, int len)
@@ -247,36 +263,40 @@ static void _msg_recv(void *connection, struct mg_connection *nc, char *msg, int
 
             char *res_body = NULL;
             int body_len = 0;
-            if (_setup_m2(NULL, (uint8_t *)hm->body.p, (int)hm->body.len, (uint8_t**)res_body, &body_len))
-            {
+            
+            char *req_body = strdup(hm->body.p);
+            
+            if (pair_setup_do(NULL, req_body, (int)hm->body.len, &res_body, &body_len)) {
                 Serial.println("test fail");
             }
             if (res_body == NULL) {
                 Serial.println("ERROR");
             }
             Serial.println("tlv_decode");
-            // struct tlv *new_state_tlv = tlv_decode(res_body, body_len, HAP_TLV_TYPE_STATE);
-            // Serial.println("tlv_decode success");
-            // uint8_t new_state = ((uint8_t *)&new_state_tlv->value)[0];
-            // Serial.println("tlv_decode success get raw state");
-            // if (new_state == 0x02) {
-            //     Serial.println("success");
-            // }
+            struct tlv *new_state_tlv = tlv_decode((uint8_t*)res_body, body_len, HAP_TLV_TYPE_STATE);
+            Serial.println("tlv_decode success");
+            uint8_t new_state = ((uint8_t *)&new_state_tlv->value)[0];
+            Serial.println("tlv_decode success get raw state");
+            if (new_state == 0x02) {
+                Serial.println("success");
+            }
 
+            char *signedBody = reinterpret_cast<char*>(res_body);
+            printf(signedBody);
             static const char *header_fmt =
                 "HTTP/1.1 200 OK\r\n"
                 "Content-Length: %d\r\n"
                 "Content-Type: application/pairing+tlv8\r\n"
                 "\r\n";
-
+            
+            
             res_header = (char *)malloc(strlen(header_fmt));
             sprintf(res_header, header_fmt, body_len);
             res_header_len = sizeof(res_header);
-        
             Serial.println("send to ios");
-            // if (res_header) {
-            //     mg_send(nc, res_header, res_header_len);
-            // }
+            if (res_header) {
+                mg_send(nc, "1234", 4);
+            }
             
             // if (res_body) {
             //     mg_send(nc, res_body, body_len);
@@ -325,6 +345,8 @@ static void _hap_connection_accept(void *accessory, struct mg_connection *nc)
 
 void setup()
 {
+    wifi_event_group = xEventGroupCreate();
+    
     Serial.begin(115200);
     delay(1000);
 
@@ -332,15 +354,19 @@ void setup()
     mdns_setup();
 
     delay(10000);
-    Serial.println("httpd_init");
-    struct httpd_ops httpd_ops = {
-        .accept = _hap_connection_accept,
-        .close = _hap_connection_close,
-        .recv = _msg_recv,
-    };
-    httpd_init(&httpd_ops);
+    xEventGroupSetBits(wifi_event_group, WIFI_CONNECTED_BIT);
+    {
+        Serial.println("httpd_init");
+        struct httpd_ops httpd_ops = {
+            .accept = _hap_connection_accept,
+            .close = _hap_connection_close,
+            .recv = _msg_recv,
+        };
+        httpd_init(&httpd_ops);
 
-    bindb = httpd_bind(PORT, NULL);
+        bindb = httpd_bind(PORT, NULL);
+    }
+
     // httpd_setup();
     // delay(1000);
     // httpd_b();

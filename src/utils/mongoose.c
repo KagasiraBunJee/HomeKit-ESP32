@@ -1459,17 +1459,22 @@ size_t mbuf_insert(struct mbuf *a, size_t off, const void *buf, size_t len) {
   assert(a != NULL);
   assert(a->len <= a->size);
   assert(off <= a->len);
-
+  printf("start insert");
   /* check overflow */
   if (~(size_t) 0 - (size_t) a->buf < len) return 0;
 
   if (a->len + len <= a->size) {
+    printf("start insert memmove");
     memmove(a->buf + off + len, a->buf + off, a->len - off);
+    printf("start insert memmove success");
     if (buf != NULL) {
+      printf("start insert memcpy");
       memcpy(a->buf + off, buf, len);
+      printf("start insert memcpy success");
     }
     a->len += len;
   } else {
+    printf("start insert MBUF_REALLOC");
     size_t new_size = (size_t)((a->len + len) * MBUF_SIZE_MULTIPLIER);
     if ((p = (char *) MBUF_REALLOC(a->buf, new_size)) != NULL) {
       a->buf = p;
@@ -2638,6 +2643,7 @@ void mg_send(struct mg_connection *nc, const void *buf, int len) {
 
 void mg_if_sent_cb(struct mg_connection *nc, int num_sent) {
   DBG(("%p %d", nc, num_sent));
+  printf("%p %d", nc, num_sent);
 #if !defined(NO_LIBC) && MG_ENABLE_HEXDUMP
   if (nc->mgr && nc->mgr->hexdump_file != NULL) {
     char *buf = nc->send_mbuf.buf;
@@ -3353,6 +3359,7 @@ int mg_socket_if_listen_udp(struct mg_connection *nc,
 
 void mg_socket_if_tcp_send(struct mg_connection *nc, const void *buf,
                            size_t len) {
+  printf("mg_socket_if_tcp_send");
   mbuf_append(&nc->send_mbuf, buf, len);
 }
 

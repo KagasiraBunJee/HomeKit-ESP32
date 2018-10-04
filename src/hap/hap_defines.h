@@ -184,3 +184,6 @@ enum hap_tlv_type {
     HAP_TLV_TYPE_FRAGMENT_LAST,
     HAP_TLV_TYPE_SEPARATOR = 0xff,
 };
+
+#define SRP_SALT_LENGTH         16
+#define SRP_PUBLIC_KEY_LENGTH   384
