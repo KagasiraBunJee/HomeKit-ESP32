@@ -54,6 +54,14 @@ static void mg_ev_handler(struct mg_connection* nc, int ev, void *p, void* user_
             printf("[HTTPD] MG_EV_SEND. %d\n", *((int*)user_data));
             break;
         }
+        case MG_EV_HTTP_REQUEST: {
+            printf("[HTTPD] MG_EV_HTTP_REQUEST. %d\n", *((int*)user_data));
+            break;
+        }
+        case MG_EV_HTTP_REPLY: {
+            printf("[HTTPD] MG_EV_HTTP_REPLY. %d\n", *((int*)user_data));
+            break;
+        }
         default: {
             printf("[HTTPD] DEFAULT:%d\n", ev);
             break;
@@ -85,7 +93,7 @@ err_mg_bind:
 }
 
 void httpd_init(struct httpd_ops* ops) {
-#define HTTPD_STACK (1024*16)
+#define HTTPD_STACK (1024*8)
     mg_mgr_init(&_mgr, NULL);
     _httpd_mutex = xSemaphoreCreateMutex();
     _ops = *ops;

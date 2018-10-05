@@ -20,12 +20,12 @@
 #include "security/ed25519/src/ed25519.h"
 // #include "hap/src/hap.h"
 
-#define PORT 14000
+#define PORT 811
 
 //SERVICE
 #define HAP_SERVICE "_hap"
 #define HAP_PROTO "_tcp"
-#define DEVICE_NAME "RGB Light"
+#define DEVICE_NAME "RGBLight"
 
 static const char *header_fmt =
                 "HTTP/1.1 200 OK\r\n"
@@ -43,6 +43,9 @@ void *bindb;
 srp_context_t serverSrp;
 srp_context_t clientSrp;
 
+WiFiServer server(PORT);
+mg_connection *newNC;
+
 void mdns_setup()
 {
 
@@ -55,7 +58,7 @@ void mdns_setup()
         Serial.println("mdns_init ok...");
     }
 
-    status = mdns_hostname_set("led.local");
+    status = mdns_hostname_set("led");
     // delay(1000);
     if (status) {
         Serial.println("Error mdns_hostname_set");
@@ -73,7 +76,7 @@ void mdns_setup()
     }
 
     // delay(1000);
-    status = mdns_service_add(DEVICE_NAME, HAP_SERVICE, HAP_PROTO, 14000, NULL, 0);
+    status = mdns_service_add(DEVICE_NAME, HAP_SERVICE, HAP_PROTO, PORT, NULL, 0);
     if (status) {
         Serial.println("Error mdns_service_add");
     }
@@ -144,11 +147,7 @@ static int _verify() {
 
 }
 
-static int _setup_m2(struct pair_setup *ps,
-                     uint8_t *device_msg, int device_msg_length,
-                     uint8_t** acc_msg, int* acc_msg_length)
-{
-    Serial.println("init SRP");
+void create_srp() {
     srp_init(NULL, 0);
     // mbedtls_mpi *salt;
     Serial.println("srp_set_username");
@@ -163,6 +162,13 @@ static int _setup_m2(struct pair_setup *ps,
 
     Serial.println("srp_gen_pub");
     srp_gen_pub(serverSrp);
+}
+
+static int _setup_m2(struct pair_setup *ps,
+                     uint8_t *device_msg, int device_msg_length,
+                     uint8_t** acc_msg, int* acc_msg_length)
+{
+    Serial.println("init SRP");
 
     Serial.println("srp_get_public_key");
     mbedtls_mpi *public_k = srp_get_public_key(serverSrp);
@@ -245,8 +251,8 @@ static void _msg_recv(void *connection, struct mg_connection *nc, char *msg, int
     mg_sock_addr_to_str(&nc->sa, addr, sizeof(addr),
                         MG_SOCK_STRINGIFY_IP | MG_SOCK_STRINGIFY_PORT);
 
-    printf("HTTP request from %s: %.*s %.*s %.*s", addr, (int)hm->method.len,
-           hm->method.p, (int)hm->uri.len, hm->uri.p, (int)hm->body.len, hm->body.p);
+    // printf("HTTP request from %s: %.*s %.*s %.*s", addr, (int)hm->method.len,
+    //        hm->method.p, (int)hm->uri.len, hm->uri.p, (int)hm->body.len, hm->body.p);
 
     if (strncmp(hm->uri.p, "/pair-setup", strlen("/pair-setup")) == 0)
     {
@@ -288,13 +294,18 @@ static void _msg_recv(void *connection, struct mg_connection *nc, char *msg, int
 
                 if (res_body)
                 {
-                    mg_send(nc, res_header, res_header_len);
-                    mg_send(nc, res_body, body_len);
+                    // mg_printf(nc, header_fmt, body_len);
+                    // mg_send_head(nc, 200, body_len, "Content-Type: application/pairing+tlv8\r\n");
+                    char *sendFull = (char *)malloc(res_header_len + body_len);
+                    strcpy(sendFull, res_header);
+                    strcat(sendFull, res_body);
+                    mg_send(nc, sendFull, res_header_len + body_len);
+                    // mg_send(nc, res_header, res_header_len);
+                    // mg_send(nc, res_body, body_len);
                 } else {
                     Serial.println("no body");
                 }
                 
-                delay(3000);
                 break;
             }
         case 0x03:
@@ -313,8 +324,10 @@ static void _msg_recv(void *connection, struct mg_connection *nc, char *msg, int
             printf("[PAIR-SETUP][ERR] Invalid state number. %d\n", state);
             break;
         }
-
-        tlv_decoded_item_free(state_tlv);
+        
+        // tlv_decoded_item_free(state_tlv);
+    } else {
+        Serial.println("want something else");
     }
 
     
@@ -331,11 +344,12 @@ static void _msg_recv(void *connection, struct mg_connection *nc, char *msg, int
 static void _hap_connection_close(void *connection, struct mg_connection *nc)
 {
     Serial.println("_hap_connection_close");
-    srp_free(serverSrp);
+    // srp_free(serverSrp);
 }
 
 static void _hap_connection_accept(void *accessory, struct mg_connection *nc)
 {
+    newNC = nc;
     Serial.println("_hap_connection_accept");
 }
 
@@ -348,6 +362,7 @@ void setup()
 
     wifi_setup();
     mdns_setup();
+    create_srp();
 
     struct httpd_ops httpd_ops = {
         .accept = _hap_connection_accept,
@@ -356,18 +371,20 @@ void setup()
     };
 
     delay(10000);
-    xEventGroupSetBits(wifi_event_group, WIFI_CONNECTED_BIT);
-    {
-        char *t = (char *)malloc(4);
-        memcpy(t, "1234", 4);
+    char *t = (char *)malloc(8);
+    strcpy(t, "1234");
         httpd_init(&httpd_ops);
         delay(10000);
         Serial.println("httpd_init");
         bindb = httpd_bind(PORT, t);
-    }
+    // server.begin();
 }
 
 void loop()
 {
+    // WiFiClient client = server.available();
 
+    // if (!client) {
+    //     return;
+    // }
 }
