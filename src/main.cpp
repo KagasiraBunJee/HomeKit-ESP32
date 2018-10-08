@@ -4,10 +4,10 @@
 
 // #include <Crypto.h>
 #include <os.h>
+#include <esp_system.h>
 #include "utils/srp.h"
 #include "utils/tlv.h"
 #include "mdns.h"
-#include "esp_wifi.h"
 //this include is in gitignore, store security credentials there
 #include "access/access.h"
 #include "freertos/FreeRTOS.h"
@@ -19,6 +19,9 @@
 #include "utils/httpd.h"
 #include "security/ed25519/src/ed25519.h"
 // #include "hap/src/hap.h"
+
+#include <esp_wifi.h>
+#include <esp_wifi_types.h>
 
 #define PORT 811
 
@@ -43,7 +46,7 @@ void *bindb;
 srp_context_t serverSrp;
 srp_context_t clientSrp;
 
-WiFiServer server(PORT);
+// WiFiServer server(PORT);
 mg_connection *newNC;
 
 void mdns_setup()
@@ -141,10 +144,6 @@ void wifi_setup() {
     Serial.print(" with IPv6: ");
     Serial.print(WiFi.localIPv6());
     Serial.println("");
-}
-
-static int _verify() {
-
 }
 
 void create_srp() {
@@ -296,12 +295,12 @@ static void _msg_recv(void *connection, struct mg_connection *nc, char *msg, int
                 {
                     // mg_printf(nc, header_fmt, body_len);
                     // mg_send_head(nc, 200, body_len, "Content-Type: application/pairing+tlv8\r\n");
-                    char *sendFull = (char *)malloc(res_header_len + body_len);
-                    strcpy(sendFull, res_header);
-                    strcat(sendFull, res_body);
-                    mg_send(nc, sendFull, res_header_len + body_len);
-                    // mg_send(nc, res_header, res_header_len);
-                    // mg_send(nc, res_body, body_len);
+                    // char *sendFull = (char *)malloc(res_header_len + body_len);
+                    // strcpy(sendFull, res_header);
+                    // strcat(sendFull, res_body);
+                    // mg_send(nc, sendFull, res_header_len + body_len);
+                    mg_send(nc, res_header, res_header_len);
+                    mg_send(nc, res_body, body_len);
                 } else {
                     Serial.println("no body");
                 }
@@ -353,6 +352,48 @@ static void _hap_connection_accept(void *accessory, struct mg_connection *nc)
     Serial.println("_hap_connection_accept");
 }
 
+static esp_err_t event_handler(void *ctx, system_event_t *event) {
+    (void)ctx;
+    // (void)event;
+
+    switch (event->event_id) {
+        case SYSTEM_EVENT_STA_CONNECTED: {
+            Serial.println("connected");
+            tcpip_adapter_create_ip6_linklocal(TCPIP_ADAPTER_IF_STA);
+            break;
+        }
+        case SYSTEM_EVENT_GOT_IP6: {
+            Serial.println("got ipv6");
+            
+            break;
+        }
+        default:
+            break;
+    }
+
+    return ESP_OK;
+}
+
+void esp_wifi_setup() {
+    tcpip_adapter_init();
+    ESP_ERROR_CHECK(esp_event_loop_init(event_handler, NULL));
+
+    /* Initializing WiFi */
+    wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
+    ESP_ERROR_CHECK(esp_wifi_init(&cfg));
+    // ESP_ERROR_CHECK(esp_wifi_set_storage(WIFI_STORAGE_RAM));
+    ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
+    wifi_config_t sta_config = {};
+    strcpy((char*)sta_config.sta.ssid, WIFI_SSID);
+    strcpy((char*)sta_config.sta.password, WIFI_PASS);
+    sta_config.sta.bssid_set = false;
+    // wifi_config_t sta_config = {
+    //     .sta = {.ssid = WIFI_SSID, .password = WIFI_PASS, .bssid_set = false}};
+    ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &sta_config));
+    ESP_ERROR_CHECK(esp_wifi_start());
+    ESP_ERROR_CHECK(esp_wifi_connect());
+}
+
 void setup()
 {
     wifi_event_group = xEventGroupCreate();
@@ -360,7 +401,10 @@ void setup()
     Serial.begin(115200);
     delay(1000);
 
-    wifi_setup();
+    // wifi_setup();
+    esp_wifi_setup();
+
+    delay(2000);
     mdns_setup();
     create_srp();
 
@@ -370,13 +414,23 @@ void setup()
         .recv = _msg_recv,
     };
 
+    hap_connection con = {};
+    mbedtls_mpi *public_k = srp_get_public_key(serverSrp);
+    mbedtls_mpi *salt = srp_get_salt(serverSrp);
+    strcpy(con.salt, (uint8_t *)(salt->p));
+    strcpy(con.public_key, (uint8_t *)(public_k->p));
+
     delay(10000);
     char *t = (char *)malloc(8);
     strcpy(t, "1234");
-        httpd_init(&httpd_ops);
-        delay(10000);
-        Serial.println("httpd_init");
-        bindb = httpd_bind(PORT, t);
+    httpd_init(&httpd_ops);
+    delay(10000);
+    Serial.println("httpd_init");
+    bindb = httpd_bind(PORT, &con);
+    // mdns_setup();
+    
+
+    
     // server.begin();
 }
 
@@ -387,4 +441,6 @@ void loop()
     // if (!client) {
     //     return;
     // }
+
+    // Serial.println("New Client!");
 }
