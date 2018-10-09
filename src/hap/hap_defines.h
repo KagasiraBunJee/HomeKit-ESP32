@@ -185,5 +185,9 @@ enum hap_tlv_type {
     HAP_TLV_TYPE_SEPARATOR = 0xff,
 };
 
+struct hap_pairing {
+    srp_context_t serverSrp;
+};
+
 #define SRP_SALT_LENGTH         16
 #define SRP_PUBLIC_KEY_LENGTH   384

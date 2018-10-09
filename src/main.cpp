@@ -45,6 +45,7 @@ srp_context_t clientSrp;
 
 WiFiServer server(PORT);
 mg_connection *newNC;
+struct hap_pairing *hp;
 
 void mdns_setup()
 {
@@ -164,15 +165,17 @@ void create_srp() {
     srp_gen_pub(serverSrp);
 }
 
-static int _setup_m2(struct pair_setup *ps,
+static int _setup_m2(struct hap_pairing ps,
                      uint8_t *device_msg, int device_msg_length,
                      uint8_t** acc_msg, int* acc_msg_length)
 {
     Serial.println("init SRP");
 
     Serial.println("srp_get_public_key");
-    mbedtls_mpi *public_k = srp_get_public_key(serverSrp);
-    mbedtls_mpi *salt = srp_get_salt(serverSrp);
+    mbedtls_mpi *public_k = (mbedtls_mpi*)malloc(sizeof(public_k));
+    memcpy(public_k, srp_get_public_key(ps.serverSrp), sizeof(srp_get_public_key(ps.serverSrp)));
+    Serial.println("srp_get_salt");
+    mbedtls_mpi *salt = srp_get_salt(ps.serverSrp);
 
     int bodySize = 0;
 
@@ -234,7 +237,12 @@ static int _setup_m4(struct pair_setup* ps,
 
 int pair_setup_do(void* _ps, char* req_body, int req_body_len, char** res_body, int* res_body_len) {
 
-    return _setup_m2(NULL, (uint8_t*)req_body, req_body_len, (uint8_t**)res_body, res_body_len);
+    struct hap_pairing *ps = (hap_pairing*)malloc(sizeof(hap_pairing));
+    memcpy(ps, _ps, sizeof(_ps));
+    if (ps != NULL) {
+        return _setup_m2(ps, (uint8_t*)req_body, req_body_len, (uint8_t**)res_body, res_body_len);
+    }
+    return 0;
 }
 
 static void _msg_recv(void *connection, struct mg_connection *nc, char *msg, int len)
@@ -296,30 +304,31 @@ static void _msg_recv(void *connection, struct mg_connection *nc, char *msg, int
                 {
                     // mg_printf(nc, header_fmt, body_len);
                     // mg_send_head(nc, 200, body_len, "Content-Type: application/pairing+tlv8\r\n");
-                    char *sendFull = (char *)malloc(res_header_len + body_len);
-                    strcpy(sendFull, res_header);
-                    strcat(sendFull, res_body);
-                    mg_send(nc, sendFull, res_header_len + body_len);
-                    // mg_send(nc, res_header, res_header_len);
-                    // mg_send(nc, res_body, body_len);
+                    // char *sendFull = (char *)malloc(res_header_len + body_len);
+                    // strcpy(sendFull, res_header);
+                    // strcat(sendFull, res_body);
+                    // mg_send(nc, sendFull, res_header_len + body_len);
+                    mg_send(nc, res_header, res_header_len);
+                    mg_send(nc, res_body, body_len);
                 } else {
                     Serial.println("no body");
                 }
                 
                 break;
             }
-        case 0x03:
-            Serial.println("0x03");
-            if (_setup_m4(NULL, (uint8_t*)req_body, (int)hm->body.len, (uint8_t**)res_body, &body_len)) {
-                Serial.println("0x03 fail");
-                return;
+            case 0x03: {
+                Serial.println("0x03");
+                if (_setup_m4(NULL, (uint8_t*)req_body, (int)hm->body.len, (uint8_t**)res_body, &body_len)) {
+                    Serial.println("0x03 fail");
+                    return;
+                }
+                // error = _setup_m4(ps, (uint8_t*)req_body, req_body_len, (uint8_t**)res_body, res_body_len);
+                break;
             }
-            // error = _setup_m4(ps, (uint8_t*)req_body, req_body_len, (uint8_t**)res_body, res_body_len);
-            break;
-        // case 0x05:
-        //     Serial.println("0x05");
-        //     // error = _setup_m6(ps, (uint8_t*)req_body, req_body_len, (uint8_t**)res_body, res_body_len);
-        //     break;
+            //case 0x05:
+            //     Serial.println("0x05");
+            //     // error = _setup_m6(ps, (uint8_t*)req_body, req_body_len, (uint8_t**)res_body, res_body_len);
+            //     break;
         default:
             printf("[PAIR-SETUP][ERR] Invalid state number. %d\n", state);
             break;
@@ -344,6 +353,7 @@ static void _msg_recv(void *connection, struct mg_connection *nc, char *msg, int
 static void _hap_connection_close(void *connection, struct mg_connection *nc)
 {
     Serial.println("_hap_connection_close");
+    newNC = NULL;
     // srp_free(serverSrp);
 }
 
@@ -363,6 +373,8 @@ void setup()
     wifi_setup();
     mdns_setup();
     create_srp();
+    hp = (hap_pairing*)malloc(sizeof(hap_pairing));
+    hp->serverSrp = serverSrp;
 
     struct httpd_ops httpd_ops = {
         .accept = _hap_connection_accept,
@@ -376,7 +388,7 @@ void setup()
         httpd_init(&httpd_ops);
         delay(10000);
         Serial.println("httpd_init");
-        bindb = httpd_bind(PORT, t);
+        bindb = httpd_bind(PORT, hp);
     // server.begin();
 }
 
