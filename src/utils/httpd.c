@@ -43,6 +43,7 @@ static void mg_ev_handler(struct mg_connection* nc, int ev, void *p, void* user_
             break;
         }
         case MG_EV_CLOSE: {
+            int connect_status;
             printf("[HTTPD] MG_EV_CLOSE");
             printf("Connection %p closed\n", nc);
             if (_ops.close) {
@@ -62,6 +63,20 @@ static void mg_ev_handler(struct mg_connection* nc, int ev, void *p, void* user_
             printf("[HTTPD] MG_EV_HTTP_REPLY. %d\n", *((int*)user_data));
             break;
         }
+        case MG_EV_CONNECT:
+        {
+            printf("[HTTPD] MG_EV_CONNECT");
+            // int connect_status;
+            // connect_status = *(int *)p;
+            // if (connect_status != 0)
+            // {
+            //     char addr[32];
+            //     mg_sock_addr_to_str(&nc->sa, addr, sizeof(addr),
+            //                     MG_SOCK_STRINGIFY_IP | MG_SOCK_STRINGIFY_PORT);
+            //     printf("Error connecting to %s: %s\n", addr, strerror(connect_status));
+            // }
+            break;
+        }
         default: {
             printf("[HTTPD] DEFAULT:%d\n", ev);
             break;
@@ -78,7 +93,7 @@ void* httpd_bind(int port, void* user_data) {
     sprintf(port_string, "%d", port);
 
     xSemaphoreTake(_httpd_mutex, 0);
-
+    
     nc = mg_bind(&_mgr, port_string, mg_ev_handler, user_data);
     if (nc == NULL) {
         printf("[ERR] mg_bind failed]n");

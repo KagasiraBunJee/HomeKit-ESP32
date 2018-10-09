@@ -185,9 +185,19 @@ enum hap_tlv_type {
     HAP_TLV_TYPE_SEPARATOR = 0xff,
 };
 
-struct hap_connection {
-    uint8_t *salt;
-    uint8_t *public_key;
+enum hap_tlv_error_codes {
+    HAP_TLV_ERROR_UNKNOWN = 1,
+    HAP_TLV_ERROR_AUTHENTICATION,
+    HAP_TLV_ERROR_BACKOFF,
+    HAP_TLV_ERROR_MAX_PEERS,
+    HAP_TLV_ERROR_MAX_TRIES,
+    HAP_TLV_ERROR_UNAVAILABLE,
+    HAP_TLV_ERROR_BUSY,
+};
+
+typedef struct hap_connection {
+    char *salt;
+    char *public_key;
 };
 
 #define SRP_SALT_LENGTH         16
@@ -229,3 +239,9 @@ static const uint8_t N[] = {
     0xa9, 0x3a, 0xd2, 0xca, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff
 };
 static const uint8_t g[] = {5};
+
+class hap {
+    public:
+        hap_connection con;
+        srp_context_t context;
+};

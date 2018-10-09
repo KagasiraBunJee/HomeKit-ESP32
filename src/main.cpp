@@ -1,8 +1,10 @@
 #include <Arduino.h>
 #include <WiFi.h>
+#include "stdio.h"
 // #include "wolfssl/wolfcrypt/srp.h"
 
-// #include <Crypto.h>
+#include <Crypto.h>
+#include <RNG.h>
 #include <os.h>
 #include <esp_system.h>
 #include "utils/srp.h"
@@ -30,15 +32,7 @@
 #define HAP_PROTO "_tcp"
 #define DEVICE_NAME "RGBLight"
 
-static const char *header_fmt =
-                "HTTP/1.1 200 OK\r\n"
-                "Content-Length: %d\r\n"
-                "Content-Type: application/pairing+tlv8\r\n"
-                "\r\n";
-
 #define SRP_SALT_LENGTH 16
-
-#include "stdio.h"
 
 const int WIFI_CONNECTED_BIT = BIT0;
 static EventGroupHandle_t wifi_event_group;
@@ -48,6 +42,7 @@ srp_context_t clientSrp;
 
 // WiFiServer server(PORT);
 mg_connection *newNC;
+hap *_hap;
 
 void mdns_setup()
 {
@@ -155,48 +150,60 @@ void create_srp() {
 
     Serial.println("srp_set_auth_password");
     // srp_set_params(serverSrp, NULL, NULL, salt);
-    const unsigned char *t = reinterpret_cast<const unsigned char *>(LIGHTS_CODE);
-    srp_set_auth_password(serverSrp, t, strlen(LIGHTS_CODE));
+    srp_set_auth_password(serverSrp, (const unsigned char *)LIGHTS_CODE, strlen(LIGHTS_CODE));
     // srp_set_params(serverSrp, NULL, NULL, tlv_salt);
+    mbedtls_mpi salt_tls;
+    mbedtls_mpi_init(&salt_tls);
+    mbedtls_mpi_read_string(&salt_tls, 16, "BEB25379D1A8581EB5A727673A2441EE");
+    srp_set_params(serverSrp, NULL, NULL, &salt_tls);
 
     Serial.println("srp_gen_pub");
     srp_gen_pub(serverSrp);
 }
 
-static int _setup_m2(struct pair_setup *ps,
+static int _setup_m2(hap *ps,
                      uint8_t *device_msg, int device_msg_length,
                      uint8_t** acc_msg, int* acc_msg_length)
 {
     Serial.println("init SRP");
 
-    Serial.println("srp_get_public_key");
-    mbedtls_mpi *public_k = srp_get_public_key(serverSrp);
-    mbedtls_mpi *salt = srp_get_salt(serverSrp);
+    // Serial.println("srp_get_public_key");
+    // mbedtls_mpi *public_k = srp_get_public_key(serverSrp);
+    // mbedtls_mpi *salt = srp_get_salt(serverSrp);
 
     int bodySize = 0;
 
     uint8_t state[] = {0x02};
     bodySize += tlv_encode_length(sizeof(state));
-    bodySize += tlv_encode_length(SRP_PUBLIC_KEY_LENGTH);
-    bodySize += tlv_encode_length(SRP_SALT_LENGTH);
-    Serial.print(public_k->n);
-    Serial.print("-");
-    Serial.print(SRP_PUBLIC_KEY_LENGTH);
-    Serial.println("");
-    Serial.print(salt->n);
-    Serial.print("-");
-    Serial.print(SRP_SALT_LENGTH);
-    Serial.println("");
-    
+
+    mbedtls_mpi *salt = srp_get_salt(ps->context);
+    unsigned char _salt[SRP_SALT_LENGTH];
+    mbedtls_mpi_write_binary(salt, _salt, sizeof(_salt));
+
+    mbedtls_mpi *public_k = srp_get_public_key(ps->context);
+    unsigned char _key[SRP_PUBLIC_KEY_LENGTH];
+    mbedtls_mpi_write_binary(public_k, _key, sizeof(_key));
+
+    bodySize += tlv_encode_length(sizeof(_salt));
+    bodySize += tlv_encode_length(sizeof(_key));
+    // Serial.print(public_k->n);
+    // Serial.print("-");
+    // Serial.print(SRP_PUBLIC_KEY_LENGTH);
+    // Serial.println("");
+    // Serial.print(salt->n);
+    // Serial.print("-");
+    // Serial.print(SRP_SALT_LENGTH);
+    // Serial.println("");
+
     Serial.println("malloc acc_msg");
     *acc_msg = (uint8_t *)(malloc(bodySize));
     Serial.println("malloc acc_msg success");
     
     uint8_t* tlv_encode_ptr = *acc_msg;
 
-    tlv_encode_ptr += tlv_encode(HAP_TLV_TYPE_SALT, SRP_SALT_LENGTH, (uint8_t *)(salt->p), *acc_msg);
+    tlv_encode_ptr += tlv_encode(HAP_TLV_TYPE_SALT, sizeof(_salt), _salt, *acc_msg);
     Serial.println("tlv_encode HAP_TLV_TYPE_SALT success");
-    tlv_encode_ptr += tlv_encode(HAP_TLV_TYPE_PUBLICKEY, public_k->n, (uint8_t *)public_k->p, *acc_msg);
+    tlv_encode_ptr += tlv_encode(HAP_TLV_TYPE_PUBLICKEY, sizeof(_key), _key, *acc_msg);
     Serial.println("tlv_encode HAP_TLV_TYPE_PUBLICKEY success");
     tlv_encode_ptr += tlv_encode(HAP_TLV_TYPE_STATE, sizeof(state), state, *acc_msg);
     Serial.println("tlv_encode HAP_TLV_TYPE_STATE success");
@@ -204,6 +211,27 @@ static int _setup_m2(struct pair_setup *ps,
     *acc_msg_length = bodySize;
     
     return 0;
+}
+
+static int _setup_error(uint8_t *device_msg, int device_msg_length, uint8_t** acc_msg, int* acc_msg_length) {
+
+    Serial.println("_setup_error");
+    uint8_t error[] = {HAP_TLV_ERROR_UNAVAILABLE};
+    *acc_msg_length = tlv_encode_length(sizeof(error));
+    (*acc_msg) = (uint8_t*)malloc(*acc_msg_length);
+    uint8_t* tlv_encode_ptr = *acc_msg;
+
+    uint8_t state[] = {0x02};
+    *acc_msg_length += tlv_encode_length(sizeof(state));
+
+    tlv_encode_ptr += tlv_encode(HAP_TLV_TYPE_STATE, sizeof(state), state, *acc_msg);
+    tlv_encode_ptr += tlv_encode(HAP_TLV_TYPE_ERROR, sizeof(error), error, tlv_encode_ptr);
+
+    return 0;
+}
+
+int pair_setup_error(char* req_body, int req_body_len, char** res_body, int* res_body_len) {
+    return _setup_error((uint8_t*)req_body, req_body_len, (uint8_t**)res_body, res_body_len);
 }
 
 static int _setup_m4(struct pair_setup* ps, 
@@ -233,11 +261,20 @@ static int _setup_m4(struct pair_setup* ps,
 
 int pair_setup_do(void* _ps, char* req_body, int req_body_len, char** res_body, int* res_body_len) {
 
-    return _setup_m2(NULL, (uint8_t*)req_body, req_body_len, (uint8_t**)res_body, res_body_len);
+    hap *p = (static_cast<hap *>(_ps));
+    if (p != NULL) {
+        return _setup_m2(p, (uint8_t*)req_body, req_body_len, (uint8_t**)res_body, res_body_len);
+    }
+    return 0;
 }
 
 static void _msg_recv(void *connection, struct mg_connection *nc, char *msg, int len)
 {
+    hap *p = (static_cast<hap *>(connection));
+    if (p->context == NULL) {
+        Serial.println("no context");
+        return;
+    }
     Serial.println(heap_caps_get_free_size(MALLOC_CAP_DEFAULT));
     Serial.println("_msg_recv");
 
@@ -261,6 +298,41 @@ static void _msg_recv(void *connection, struct mg_connection *nc, char *msg, int
         if (state_tlv == NULL)
         {
             printf("tlv_decode failed. type:%d\n", HAP_TLV_TYPE_STATE);
+
+            char *res_header = NULL;
+            int res_header_len = 0;
+
+            char *res_body = NULL;
+            int body_len = 0;
+
+            char *req_body = strdup(hm->body.p);
+
+            if (pair_setup_error(req_body, hm->body.len, &res_body, &body_len))
+            {
+            }
+            if (res_body == NULL)
+            {
+                Serial.println("ERROR");
+            }
+            if (res_body)
+            {
+                Serial.println("send to ios");
+                // mg_printf(nc, header_fmt, body_len);
+                // mg_send_head(nc, 200, body_len, "Content-Type: application/pairing+tlv8\r\n");
+                // char *sendFull = (char *)malloc(res_header_len + body_len);
+                // strcpy(sendFull, res_header);
+                // strcat(sendFull, res_body);
+                // mg_send(nc, sendFull, res_header_len + body_len);
+                Serial.println("send header");
+                mg_send_head(nc, 200, body_len, "Content-Type: application/pairing+tlv8");
+                Serial.println("send body");
+                // mg_send(nc, res_header, res_header_len);
+                mg_send(nc, res_body, body_len);
+            } else {
+                Serial.println("no body");
+            }
+
+            return;
         }
 
         uint8_t state = ((uint8_t *)&state_tlv->value)[0];
@@ -272,33 +344,44 @@ static void _msg_recv(void *connection, struct mg_connection *nc, char *msg, int
         int body_len = 0;
 
         char *req_body = strdup(hm->body.p);
-
+        
         switch (state)
         {
             case 0x01:
             {
-                if (pair_setup_do(NULL, req_body, (int)hm->body.len, &res_body, &body_len))
-                {
-                    Serial.println("test fail");
+                // if (pair_setup_do(p, req_body, (int)hm->body.len, &res_body, &body_len))
+                // {
+                //     Serial.println("test fail");
+                // }
+                if (pair_setup_error(req_body, hm->body.len, &res_body, &body_len)) {
+                    
                 }
                 if (res_body == NULL)
                 {
                     Serial.println("ERROR");
                 }
 
+                static const char *header_fmt =
+                "HTTP/1.1 400 BAD REQUEST\r\n"
+                "Content-Length: %d\r\n"
+                "Content-Type: application/pairing+tlv8\r\n"
+                "\r\n";
+
                 res_header = (char *)malloc(strlen(header_fmt));
                 sprintf(res_header, header_fmt, body_len);
                 res_header_len = sizeof(res_header);
-                Serial.println("send to ios");
 
-                if (res_body)
-                {
+                if (res_body) {
+                    Serial.println("send to ios");
                     // mg_printf(nc, header_fmt, body_len);
                     // mg_send_head(nc, 200, body_len, "Content-Type: application/pairing+tlv8\r\n");
                     // char *sendFull = (char *)malloc(res_header_len + body_len);
                     // strcpy(sendFull, res_header);
                     // strcat(sendFull, res_body);
                     // mg_send(nc, sendFull, res_header_len + body_len);
+                    Serial.println("send header");
+                    // mg_send_head(nc, 200, body_len, "Content-Type: application/pairing+tlv8");
+                    Serial.println("send body");
                     mg_send(nc, res_header, res_header_len);
                     mg_send(nc, res_body, body_len);
                 } else {
@@ -404,7 +487,7 @@ void setup()
     // wifi_setup();
     esp_wifi_setup();
 
-    delay(2000);
+    delay(3000);
     mdns_setup();
     create_srp();
 
@@ -414,11 +497,31 @@ void setup()
         .recv = _msg_recv,
     };
 
-    hap_connection con = {};
-    mbedtls_mpi *public_k = srp_get_public_key(serverSrp);
-    mbedtls_mpi *salt = srp_get_salt(serverSrp);
-    strcpy(con.salt, (uint8_t *)(salt->p));
-    strcpy(con.public_key, (uint8_t *)(public_k->p));
+    Serial.println("init hap object");
+    _hap = (hap*)malloc(sizeof(hap));
+    
+    Serial.println("options");
+    _hap->context = serverSrp;
+    // struct hap_connection con;
+    // memset(&con, 0, sizeof(hap_connection));
+    // mbedtls_mpi *public_k = srp_get_public_key(serverSrp);
+    // mbedtls_mpi *salt = srp_get_salt(serverSrp);
+    // unsigned char u_salt[SRP_SALT_LENGTH];
+    // unsigned char u_key[SRP_PUBLIC_KEY_LENGTH];
+    // mbedtls_mpi_write_binary(salt, u_salt, SRP_SALT_LENGTH);
+    // mbedtls_mpi_write_binary(public_k, u_key, SRP_PUBLIC_KEY_LENGTH);
+    Serial.println("fill options");
+    // con.salt = reinterpret_cast<char*>(u_salt);
+    // con.public_key = reinterpret_cast<char*>(u_key);
+    // con.salt = (char*)malloc(SRP_SALT_LENGTH);
+    // con.public_key = (char*)malloc(SRP_PUBLIC_KEY_LENGTH);
+    // memcpy(con.salt, u_salt, SRP_SALT_LENGTH);
+    // memcpy(con.public_key, u_key, SRP_PUBLIC_KEY_LENGTH);
+    // Serial.println("fill options");
+    // strcpy(con.salt, reinterpret_cast<char*>(u_salt));
+    // strcpy(con.public_key, reinterpret_cast<char*>(u_key));
+
+    // _hap->con = con;
 
     delay(10000);
     char *t = (char *)malloc(8);
@@ -426,7 +529,7 @@ void setup()
     httpd_init(&httpd_ops);
     delay(10000);
     Serial.println("httpd_init");
-    bindb = httpd_bind(PORT, &con);
+    bindb = httpd_bind(PORT, t);
     // mdns_setup();
     
 
